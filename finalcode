@@ -1,0 +1,507 @@
+! wget https://repo.anaconda.com/miniconda/Miniconda3-py37_4.8.2-Linux-x86_64.sh
+! chmod +x Miniconda3-py37_4.8.2-Linux-x86_64.sh
+! bash ./Miniconda3-py37_4.8.2-Linux-x86_64.sh -b -f -p /usr/local
+! conda install -c rdkit rdkit -y
+import sys
+sys.path.append('/usr/local/lib/python3.7/site-packages/')
+import pandas as pd
+try:
+    df = pd.read_csv('bioactivity_preprocessed_data.csv')
+except Exception as e:
+    print(f"An error occurred: {e}")
+import pandas as pd
+!pip install rdkit
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import Descriptors, Lipinski
+df_original = pd.read_csv('bioactivity_preprocessed_data.csv')
+def view_ec50(df):
+    try:
+        ec50_column = df['EC50 (nM)']
+        return ec50_column
+    except KeyError:
+        return "EC50 (nM) column not found in the DataFrame."
+
+ec50_values = view_ec50(df_original)
+
+print(ec50_values)
+from IPython.display import display
+
+display(df_original)
+def lipinski(smiles, verbose=False):
+
+    moldata= []
+    for elem in smiles:
+        mol=Chem.MolFromSmiles(elem)
+        moldata.append(mol)
+
+    baseData= np.arange(1,1)
+    i=0
+    for mol in moldata:
+
+        desc_MolWt = Descriptors.MolWt(mol)
+        desc_MolLogP = Descriptors.MolLogP(mol)
+        desc_NumHDonors = Lipinski.NumHDonors(mol)
+        desc_NumHAcceptors = Lipinski.NumHAcceptors(mol)
+
+        row = np.array([desc_MolWt,
+                        desc_MolLogP,
+                        desc_NumHDonors,
+                        desc_NumHAcceptors])
+
+        if(i==0):
+            baseData=row
+        else:
+            baseData=np.vstack([baseData, row])
+        i=i+1
+
+    columnNames=["MW","LogP","NumHDonors","NumHAcceptors"]
+    descriptors = pd.DataFrame(data=baseData,columns=columnNames)
+
+    return descriptors
+df_lipinski = lipinski(df['Ligand SMILES'])
+df_lipinski
+df
+df_combined = pd.concat([df,df_lipinski], axis=1)
+df_combined
+df_cleaned = df_combined[df_combined['MW'] < 500]
+def pEC50(input, ec50_column='EC50 (nM)'):
+    pEC50 = []
+    for i in input[ec50_column]:
+        try:
+            i = float(i)
+            if i > 0:
+                molar = i * (10 ** -9)
+                pEC50.append(-np.log10(molar))
+            else:
+                pEC50.append(np.nan)
+        except ValueError:
+            pEC50.append(np.nan)
+    input['pEC50'] = pEC50
+    x = input.drop(ec50_column, axis=1)
+    return x
+from IPython.display import display
+
+display(df_combined)
+df_2class = df_combined[~df_combined['pEC50'].isna()]
+df_2class
+! zip -r results.zip . -i *.csv *.pdf
+df_2class.to_csv('df_2class.csv', index=False)
+
+from IPython.display import FileLink
+FileLink('df_2class.csv')
+! wget https://github.com/dataprofessor/bioinformatics/raw/master/padel.zip
+! wget https://github.com/dataprofessor/bioinformatics/raw/master/padel.sh
+! unzip padel.zip
+import pandas as pd
+df3 = pd.read_csv('df_2class.csv')
+df3
+selection = ['Ligand SMILES','ChEMBL ID of Ligand']
+df3_selection = df3[selection]
+df3_selection.to_csv('molecule.smi', sep='\t', index=False, header=False)
+! cat molecule.smi | head -5
+! cat molecule.smi | wc -l
+! cat padel.sh
+! bash padel.sh
+! ls -l
+df3_X = pd.read_csv('descriptors_output.csv')
+df3_X
+df3_X = df3_X.drop(columns=['Name'])
+df3_X
+df3_Y = df3['pEC50']
+df3_Y
+df3_X = df3_X.reset_index(drop=True)
+df3_Y = df3_Y.reset_index(drop=True)
+dataset3 = pd.concat([df3_X, df3_Y], axis=1)
+dataset3 = pd.merge(df3_X, df3_Y, left_index=True, right_index=True)
+dataset3
+dataset3.to_csv('drd4_bioactivity_data_2class_pIC50_pubchem_fp.csv', index=False)
+QSAR Model
+import pandas as pd
+import seaborn as sns
+import torch
+import torch.nn as nn
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+import xgboost
+from sklearn.feature_selection import VarianceThreshold
+import numpy as np
+
+df = pd.read_csv('/content/drd4_bioactivity_data_2class_pEC50_pubchem_fp (binding).csv')
+x = df.drop('pEC50', axis=1)
+y = df.pEC50
+selection = VarianceThreshold(threshold=(.8 * (1 - .8)))
+x = selection.fit_transform(x)
+x_train,  x_test, y_train, y_test = train_test_split(x, y, test_size = 0.2)
+
+model = xgboost.XGBRegressor(n_estimators=100, learning_rate = 0.1)
+model.fit(x_train, y_train)
+score = model.score(x_test, y_test)
+Score
+
+model.save_model('QSAR.model')
+
+
+
+
+
+
+
+
+
+
+
+
+SFT of GPT-2
+from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+import pandas as pd
+from datasets import Dataset, DatasetDict
+from trl import SFTTrainer, SFTConfig
+import torch
+print(torch.cuda.is_available())
+print(torch.cuda.get_device_name(0))
+df = pd.read_csv('BindingDB_ChEMBL.tsv', sep='\t', on_bad_lines='skip', quoting=3)
+
+def prepare_dataset(df):
+    df = df.dropna(subset=['EC50 (nM)'])
+    df = df[['Ligand SMILES', 'BindingDB Target Chain Sequence', 'EC50 (nM)']]
+    df['EC50 (nM)'] = pd.to_numeric(df['EC50 (nM)'], errors='coerce')
+    df = df[(df['EC50 (nM)'] >= 10) & (df['EC50 (nM)'] <= 100)]
+    df =df.drop_duplicates(subset=['Ligand SMILES'])
+
+    value_counts = {}
+    filtered_rows = []
+
+    for index, row in df.iterrows():
+        value = row['BindingDB Target Chain Sequence']
+
+        value_counts[value] = value_counts.get(value, 0)
+        if value_counts[value] < 3:
+            filtered_rows.append(row)
+            value_counts[value] += 1
+
+    final_df = pd.DataFrame(filtered_rows)
+
+    return final_df
+
+processed_df = prepare_dataset(df)
+print(processed_df.shape)
+processed_df = processed_df.rename(columns={'Ligand SMILES': 'text'})
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+
+def tokenize(batch):
+    inputs = tokenizer(batch["text"],
+        truncation=True,
+        padding="max_length",
+        max_length=128)
+    inputs["labels"] = inputs["input_ids"].copy()
+
+    return inputs
+
+tokenizer.pad_token = tokenizer.eos_token
+model.config.pad_token_id = tokenizer.pad_token_id
+
+dataset = Dataset.from_pandas(processed_df)
+tokenized_data = dataset.map(tokenize, batched=True)
+tokenized_data.set_format(type="torch", columns=["input_ids", "labels", "attention_mask"])
+
+tokenizer.pad_token = "<PAD>"
+model.config.pad_token_id = tokenizer.pad_token_id
+
+train_test_split = dataset.train_test_split(test_size=0.2)
+train_dataset = train_test_split['train']
+eval_dataset = train_test_split['test']
+
+training_args = SFTConfig(
+    max_seq_length= 128,
+    output_dir="./drug_generator2",
+    num_train_epochs=5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    eval_strategy="epoch",
+    save_strategy="epoch",
+    logging_steps=25,
+    learning_rate=5e-4,
+    adam_epsilon=1e-8,
+    warmup_steps=100,
+    save_total_limit=2,
+    fp16=False,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
+    packing=False
+)
+
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    args=training_args,    
+)
+trainer.train()
+
+model.save_pretrained("./drug_generator_model2")
+tokenizer.save_pretrained("./drug_generator_model2")
+
+
+RL with PPO 
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel, PretrainedConfig, pipeline
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from trl import create_reference_model
+import torch
+import torch.nn as nn
+from rdkit import Chem
+from rdkit.Chem import rdchem
+import numpy as np
+import pandas as pd
+import sys
+from copy import deepcopy
+
+sys.path.append('WELP-PLAPT')
+from plapt import Plapt
+
+
+df = pd.read_csv('BindingDB_ChEMBL.tsv', sep='\t', on_bad_lines='skip', quoting=3)
+
+def prepare_dataset(df):
+    df = df.dropna(subset=['EC50 (nM)'])
+    df = df[['Ligand SMILES', 'BindingDB Target Chain Sequence', 'EC50 (nM)']]
+    df['EC50 (nM)'] = pd.to_numeric(df['EC50 (nM)'], errors='coerce')
+    df = df[(df['EC50 (nM)'] >= 10) & (df['EC50 (nM)'] <= 100)]
+    df =df.drop_duplicates(subset=['Ligand SMILES'])
+
+    value_counts = {}
+    filtered_rows = []
+
+    for index, row in df.iterrows():
+        value = row['BindingDB Target Chain Sequence']
+
+        value_counts[value] = value_counts.get(value, 0)
+        if value_counts[value] < 3:
+            filtered_rows.append(row)
+            value_counts[value] += 1
+
+    final_df = pd.DataFrame(filtered_rows)
+
+    return final_df
+
+processed_df = prepare_dataset(df)
+approved_smiles = processed_df["Ligand SMILES"]
+prot_seq = processed_df['BindingDB Target Chain Sequence']
+
+class SMILESValidator:
+    def __init__(self):
+        self.checkers = [
+            NumAtomsMolChecker(),
+            ValenceErrorMolChecker(),
+            ParserErrorMolChecker(),
+        ]
+
+    def validate_smiles(self, smiles):
+        results = []
+        for checker in self.checkers:
+            if checker.check(smiles):
+                results.append((checker.penalty, checker.explanation))
+        return results
+
+class NumAtomsMolChecker:
+    def __init__(self):
+        self.name = "num_atoms_equals_zero"
+        self.explanation = "number of atoms less than 1"
+        self.penalty = 8
+
+    def check(self, smiles):
+        mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        return mol is not None and mol.GetNumAtoms() < 2
+
+class ValenceErrorMolChecker:
+    def __init__(self):
+        self.name = "valence_error"
+        self.explanation = "Contains valence different from permitted"
+        self.penalty = 9
+
+    def check(self, smiles):
+        try:
+            mol = Chem.MolFromSmiles(smiles, sanitize=False)
+            if not mol:
+                return False
+            Chem.SanitizeMol(mol)
+            return False
+        except rdchem.AtomValenceException:
+            return True
+        except Exception as e:
+            return False
+
+class ParserErrorMolChecker:
+    def __init__(self):
+        self.name = "parser_error"
+        self.explanation = "Smiles could not be parsed"
+        self.penalty = 10
+
+    def check(self, smiles):
+        try:
+            mol = Chem.MolFromSmiles(smiles, sanitize=False)
+            return mol is None
+        except Exception:
+            return True
+       
+class RewardModelConfig(PretrainedConfig):
+    model_type = "reward_model"
+   
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+class RewardModel(PreTrainedModel):
+    config_class = RewardModelConfig
+   
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+       
+    def forward(self, input_ids=None, attention_mask=None, labels=None, generated_text=None, protein_sequence=None):
+        if generated_text is None or protein_sequence is None:
+            return torch.tensor([-1.0])
+       
+        rewards = []
+        for text in generated_text:
+            mol = Chem.MolFromSmiles(text)
+            if mol is None:
+                rewards.append(-1.0)
+                continue
+           
+            rewards.append(1.0)
+           
+        return torch.tensor(rewards, dtype=torch.float32)
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        if not args and 'config' not in kwargs:
+            config = RewardModelConfig()
+        else:
+            config = kwargs.get('config', args[0])
+           
+        model = cls(config)
+        return model  
+class RewardPipeline(nn.Module):
+    def __init__(self, reward_model, protein_sequences):
+        super().__init__()
+        self.reward_model = reward_model
+        self.register_buffer('current_sequence_idx', torch.tensor(0))
+        self.protein_sequences = protein_sequences
+       
+    def forward(self, model_outputs, response_length=None):
+        if isinstance(model_outputs, torch.Tensor):
+            generated_text = self.reward_model.tokenizer.batch_decode(model_outputs, skip_special_tokens=True)
+        else:
+            generated_text = model_outputs
+
+        current_sequence = self.protein_sequences.iloc[self.current_sequence_idx.item()]
+        self.current_sequence_idx = torch.tensor((self.current_sequence_idx.item() + 1) % len(self.protein_sequences))
+       
+        rewards = self.reward_model(
+            generated_text=generated_text,
+            protein_sequence=current_sequence
+        )
+       
+        return rewards
+
+plapt_model = Plapt()
+model = AutoModelForCausalLM.from_pretrained("./drug_generator_model2")
+tokenizer = AutoTokenizer.from_pretrained("./drug_generator_model2")
+
+generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
+
+smiles_validator = SMILESValidator()
+
+config = RewardModelConfig()
+reward_model = RewardModel(config=config)
+reward_model.tokenizer = tokenizer
+
+reward_pipeline = RewardPipeline(reward_model, prot_seq)
+
+ppo_config = PPOConfig(
+    mini_batch_size= 8,
+    batch_size=240,
+    learning_rate=1.41e-5,
+    output_dir="./ppo_drug_generator"
+)
+
+ppo_trainer = PPOTrainer(
+    processing_class=tokenizer,
+    model=model,
+    args=ppo_config,
+    ref_model=create_reference_model(model),
+    reward_model=reward_pipeline,
+    train_dataset=prot_seq,
+    value_model=model
+)
+
+def train_ppo(epochs):
+    for epoch in range(epochs):
+        print(f"Starting Epoch {epoch + 1}")
+       
+        protein_sequences = processed_df['BindingDB Target Chain Sequence'].head(50).to_numpy()
+       
+        generated_smiles_dict = {seq: set() for seq in protein_sequences}
+       
+        for protein_sequence in protein_sequences:
+            print(f"Generating SMILES for protein sequence: {protein_sequence}")
+           
+            while len(generated_smiles_dict[protein_sequence]) < 30:
+                input_prompt = f"Protein: {protein_sequence} -> Valid SMILES:"
+                inputs = tokenizer(input_prompt, return_tensors="pt",              padding=True, truncation=True)
+                input_ids = inputs.input_ids.to(model.device)
+                attention_mask = inputs.attention_mask.to(model.device)
+               
+                generated_ids = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=50,
+                    do_sample=True,
+                    top_k=50,
+                    top_p=0.95,
+                    num_return_sequences=10,
+                    bos_token_id=tokenizer.bos_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    pad_token_id=tokenizer.pad_token_id
+                )
+               
+                generated_texts = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+                generated_smiles = [text.split("Valid SMILES:")[-1].strip() for text in generated_texts]
+                             generated_smiles_dict[protein_sequence].update(generated_smiles)
+                rewards = reward_pipeline(generated_smiles, [protein_sequence] * len(generated_smiles))
+               
+            print(f"Generated {len(generated_smiles_dict[protein_sequence])} unique SMILES for protein sequence: {protein_sequence}")
+        print(f"Epoch {epoch + 1}: Completed generating SMILES for all 50 protein sequences.")
+train_ppo(epochs=10)
+
+model.save_pretrained("./ppo_drug_generator")
+tokenizer.save_pretrained("./ppo_drug_generator")
+SMILES Structure Generation
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+from rdkit import Chem
+
+DrugGen = AutoModelForCausalLM.from_pretrained("./drug_generator_model")
+DrugGen_Token = AutoTokenizer.from_pretrained("./drug_generator_model")
+
+generator = pipeline("text-generation", model=DrugGen, tokenizer=DrugGen_Token)
+
+protein_sequence = "MGNRSTADADGLLAGRGPAAGASAGASAGLAGQGAAALVGGVLLIGAVLAGNSLVCVSVATERALQTPTNSFIVSLAAADLLLALLVLPLFVYSEVQGGAWLLSPRLCDALMAMDVMLCTASIFNLCAISVDRFVAVAVPLRYNRQGGSRRQLLLIGATWLLSAAVAAPVLCGLNDVRGRDPAVCRLEDRDYVVYSSVCSFFLPCPLMLLLYWATFRGLQRWEVARRAKLHGRAPRRPSGPGPPSPTPPAPRLPQDPCGPDCAPPAPGLPRGPCGPDCAPAAPSLPQDPCGPDCAPPAPGLPPDPCGSNCAPPDAVRAAALPPQTPPQTRRRRRAKITGRERKAMRVLPVVVGAFLLCWTPFFVVHITQALCPACSVPPRLVSAVTWLGYVNSALNPVIYTVFNAEFRNVFRKALRACC"
+input_prompt = f"Protein: {protein_sequence} -> Valid SMILES:"
+result = generator(
+    input_prompt,
+    max_new_tokens=50,
+    num_return_sequences=20,
+    no_repeat_ngram_size=2,
+    temperature=0.7,  
+    top_k=50,
+    top_p=0.95,
+    do_sample=True
+)
+
+print("\nGenerated SMILES:")
+for i, smile in enumerate(result):
+    print(f"SMILES {i+1}: {smile['generated_text']}")
